@@ -55,12 +55,18 @@ public:
                 // Processar diretiva IF e verificar a necessidade de incluir a linha seguinte
                 try
                 {
-                    processIf(currentLine, equMap, output);
-                    // Adicionar a linha seguinte, se necessário
+                    // Armazena a próxima linha
+                    std::string nextLine;
                     if (++it != lines.end())
                     {
-                        output << replaceEqu(*it, equMap) << std::endl;
+                        nextLine = *it;
                     }
+                    else
+                    {
+                        throw std::runtime_error("Error: No line following IF directive.");
+                    }
+
+                    processIf(currentLine, equMap, output, nextLine);
                 }
                 catch (const std::runtime_error &e)
                 {
@@ -84,6 +90,7 @@ public:
         int locationCounter = 0;
         std::unordered_map<std::string, int> symbolTable;
         std::unordered_set<std::string> labelsInCurrentLine;
+        bool hasBeginEnd = false;
 
         while (std::getline(input, line))
         {
@@ -97,6 +104,24 @@ public:
             std::vector<std::string> operands;
 
             parseTokens(tokens, label, opcode, operands);
+
+                                                            // Print the values
+                                                            std::cout << "Tokens: ";
+                                                            for (const auto &token : tokens)
+                                                            {
+                                                                std::cout << token << " ";
+                                                            }
+                                                            std::cout << std::endl;
+
+                                                            std::cout << "Label: " << label << std::endl;
+                                                            std::cout << "Opcode: " << opcode << std::endl;
+
+                                                            std::cout << "Operands: ";
+                                                            for (const auto &operand : operands)
+                                                            {
+                                                                std::cout << operand << " ";
+                                                            }
+                                                            std::cout << std::endl;
 
             if (!label.empty())
             {
@@ -126,8 +151,50 @@ public:
                 throw std::runtime_error("Error: Incorrect number of operands for opcode: " + opcode);
             }
 
-            locationCounter += getOpcodeSize(opcode, operands.size());
-            output << line << std::endl; // For simplicity, output the processed line
+            if (opcode == "BEGIN" || opcode == "END")
+            {
+                hasBeginEnd = true;
+            }
+
+            // Gerar código objeto diretamente
+            if (opcode == "SPACE")
+            {
+                output << "00 ";
+                locationCounter++;
+            }
+            else if (opcode == "CONST")
+            {
+                output << operands[0] << " ";
+                locationCounter++;
+            }
+            else
+            {
+                int opcodeValue = getOpcodeValue(opcode);
+                output << opcodeValue << " ";
+                locationCounter++;
+
+                for (const auto &operand : operands)
+                {
+                    if (symbolTable.find(operand) != symbolTable.end())
+                    {
+                        output << symbolTable[operand] << " ";
+                    }
+                    else if (isValidImmediateValue(operand))
+                    {
+                        output << operand << " "; // Para valores imediatos
+                    }
+                    else
+                    {
+                        throw std::runtime_error("Error: Undefined symbol: " + operand);
+                    }
+                    locationCounter++;
+                }
+            }
+        }
+
+        if (!hasBeginEnd)
+        {
+            throw std::runtime_error("Error: Missing BEGIN or END directive.");
         }
     }
 
@@ -140,6 +207,18 @@ private:
             return line.substr(0, commentPos);
         }
         return line;
+    }
+
+    bool isValidImmediateValue(const std::string &operand)
+    {
+        for (char c : operand)
+        {
+            if (!isdigit(c) && c != '-')
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     void processEqu(const std::string &line, std::unordered_map<std::string, int> &equMap)
@@ -155,7 +234,7 @@ private:
         }
     }
 
-    void processIf(const std::string &line, const std::unordered_map<std::string, int> &equMap, std::ofstream &output)
+    void processIf(const std::string &line, const std::unordered_map<std::string, int> &equMap, std::ofstream &output, const std::string &nextLine)
     {
         std::istringstream iss(line);
         std::string directive, conditionStr;
@@ -168,18 +247,7 @@ private:
 
             if (condition == 1)
             {
-                std::string nextLine;
-                std::cout << nextLine << std::endl;
-                std::istringstream iss(nextLine);
-                std::cout << iss.str() << std::endl;
-                if (std::getline(iss, nextLine))
-                {
-                    output << nextLine << std::endl;
-                }
-                else
-                {
-                    throw std::runtime_error("Error: No line following IF directive.");
-                }
+                output << nextLine << std::endl;
             }
         }
         catch (const std::invalid_argument &)
@@ -197,12 +265,9 @@ private:
         std::string result = line;
         for (const auto &[label, value] : equMap)
         {
-            std::cout << "Replacing " << label << " with " << value << std::endl;
             std::string labelWithColon = label + ":";
             result = std::regex_replace(result, std::regex("\\b" + labelWithColon + "\\b"), std::to_string(value));
             result = std::regex_replace(result, std::regex("\\b" + label + "\\b"), std::to_string(value));
-
-            std::cout << "Result: " << result << std::endl;
         }
         return result;
     }
@@ -225,22 +290,21 @@ private:
 
         while (iss.get(ch))
         {
-            if (std::isspace(ch) || ch == ',') // Espaços e vírgulas como delimitadores
+            if (ch == ' ' || ch == '\t')
             {
-                if (!token.empty()) // Se o token não está vazio, adicione-o à lista
+                if (!token.empty())
                 {
                     tokens.push_back(token);
                     token.clear();
                 }
-                // Não adicionar vírgulas como tokens
             }
             else
             {
-                token += ch; // Adiciona o caractere ao token
+                token.push_back(ch);
             }
         }
 
-        if (!token.empty()) // Adiciona o último token, se houver
+        if (!token.empty())
         {
             tokens.push_back(token);
         }
@@ -250,61 +314,75 @@ private:
 
     void parseTokens(const std::vector<std::string> &tokens, std::string &label, std::string &opcode, std::vector<std::string> &operands)
     {
-        std::cout << "Tokens: ";
-        for (const auto &token : tokens)
+        if (tokens.empty())
+            return;
+
+        size_t i = 0;
+
+        if (tokens[i].back() == ':')
         {
-            std::cout << token << " ";
+            label = tokens[i].substr(0, tokens[i].size() - 1);
+            ++i;
         }
-        std::cout << std::endl;
-        if (!tokens.empty() && tokens[0].back() == ':')
+
+        if (i < tokens.size())
         {
-            label = tokens[0];
-            opcode = tokens[1];
-            operands.assign(tokens.begin() + 2, tokens.end());
+            opcode = tokens[i++];
         }
-        else
+
+        while (i < tokens.size())
         {
-            opcode = tokens[0];
-            operands.assign(tokens.begin() + 1, tokens.end());
+            operands.push_back(tokens[i++]);
         }
     }
 
     bool isValidLabel(const std::string &label)
     {
-        return std::regex_match(label, std::regex("^[a-zA-Z_][a-zA-Z0-9_]*$"));
+        return std::regex_match(label, std::regex("^[A-Za-z][A-Za-z0-9]*$"));
     }
 
     bool isValidOpcode(const std::string &opcode)
     {
         static const std::unordered_set<std::string> validOpcodes = {
             "ADD", "SUB", "MULT", "DIV", "JMP", "JMPN", "JMPP", "JMPZ", "COPY",
-            "LOAD", "STORE", "INPUT", "OUTPUT", "STOP", "SECTION", "SPACE", "CONST",
-            "EQU", "IF", "MACRO", "ENDMACRO"};
+            "LOAD", "STORE", "INPUT", "OUTPUT", "STOP"};
+
         return validOpcodes.find(opcode) != validOpcodes.end();
     }
 
     bool hasCorrectNumberOfOperands(const std::string &opcode, size_t numOperands)
     {
-        static const std::unordered_map<std::string, size_t> operandCount = {
-            {"ADD", 1}, {"SUB", 1}, {"MULT", 1}, {"DIV", 1}, {"JMP", 1}, {"JMPN", 1}, {"JMPP", 1}, {"JMPZ", 1}, {"COPY", 2}, {"LOAD", 1}, {"STORE", 1}, {"INPUT", 1}, {"OUTPUT", 1}, {"STOP", 0}, {"SECTION", 1}, {"SPACE", 0}, {"CONST", 1}, {"EQU", 1}, {"IF", 1}, {"MACRO", 0}, {"ENDMACRO", 0}};
-        auto it = operandCount.find(opcode);
-        if (it != operandCount.end())
+        static const std::unordered_map<std::string, size_t> opcodeOperandCount = {
+            {"ADD", 1}, {"SUB", 1}, {"MULT", 1}, {"DIV", 1}, {"JMP", 1}, {"JMPN", 1}, {"JMPP", 1}, {"JMPZ", 1}, {"COPY", 2}, {"LOAD", 1}, {"STORE", 1}, {"INPUT", 1}, {"OUTPUT", 1}, {"STOP", 0}};
+
+        auto it = opcodeOperandCount.find(opcode);
+        if (it != opcodeOperandCount.end())
         {
             return it->second == numOperands;
         }
         return false;
     }
 
-    int getOpcodeSize(const std::string &opcode, size_t numOperands)
+    int getOpcodeValue(const std::string &opcode)
     {
-        static const std::unordered_map<std::string, int> opcodeSizes = {
-            {"ADD", 2}, {"SUB", 2}, {"MULT", 2}, {"DIV", 2}, {"JMP", 2}, {"JMPN", 2}, {"JMPP", 2}, {"JMPZ", 2}, {"COPY", 3}, {"LOAD", 2}, {"STORE", 2}, {"INPUT", 2}, {"OUTPUT", 2}, {"STOP", 1}, {"SECTION", 0}, {"SPACE", 1}, {"CONST", 1}, {"EQU", 0}, {"IF", 0}, {"MACRO", 0}, {"ENDMACRO", 0}};
-        auto it = opcodeSizes.find(opcode);
-        if (it != opcodeSizes.end())
+        static const std::unordered_map<std::string, int> opcodeValues = {
+            {"ADD", 1}, {"SUB", 2}, {"MULT", 3}, {"DIV", 4}, {"JMP", 5}, {"JMPN", 6}, {"JMPP", 7}, {"JMPZ", 8}, {"COPY", 9}, {"LOAD", 10}, {"STORE", 11}, {"INPUT", 12}, {"OUTPUT", 13}, {"STOP", 14}};
+
+        auto it = opcodeValues.find(opcode);
+        if (it != opcodeValues.end())
         {
             return it->second;
         }
-        throw std::runtime_error("Error: Invalid opcode size for opcode: " + opcode);
+        throw std::runtime_error("Error: Invalid opcode: " + opcode);
+    }
+
+    int getOpcodeSize(const std::string &opcode, size_t numOperands)
+    {
+        if (opcode == "COPY")
+        {
+            return 3; // COPY tem dois operandos
+        }
+        return 2; // Todas as outras instruções têm um operando
     }
 };
 
