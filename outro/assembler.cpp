@@ -9,6 +9,10 @@
 #include <unordered_set>
 #include <sstream>
 #include <iterator>
+#include <vector>
+#include <string>
+#include <cctype>
+#include <stack>
 
 // Funções utilitárias
 std::string Assembler::removeComments(const std::string &line)
@@ -133,18 +137,9 @@ bool Assembler::isValidImmediateValue(const std::string &operand)
 {
     return std::regex_match(operand, std::regex("^\\d+$"));
 }
-
-#include <unordered_map>
-#include <vector>
-#include <string>
-#include <fstream>
-#include <sstream>
-#include <stdexcept>
-
-// Adiciona um campo `isExtern` à tabela de símbolos
 struct SymbolInfo
 {
-    std::vector<int> address;
+    int address;
     bool isExtern;
     bool isResolved;
 };
@@ -152,7 +147,7 @@ struct SymbolInfo
 void Assembler::assemble(const std::string &inputFile, const std::string &finalOutputFile)
 {
     std::ifstream input(inputFile);
-    std::ofstream tempOutput("temp.obj");
+    std::ostringstream tempOutput;
     std::ofstream finalOutput(finalOutputFile);
     std::string line;
     int locationCounter = 0;
@@ -164,6 +159,7 @@ void Assembler::assemble(const std::string &inputFile, const std::string &finalO
     bool hasEnd = false;
 
     // Primeira Passagem: Montagem inicial
+    std::cout << "First pass:" << std::endl;
     while (std::getline(input, line))
     {
         line = removeComments(line);
@@ -174,8 +170,38 @@ void Assembler::assemble(const std::string &inputFile, const std::string &finalO
         std::vector<std::string> tokens = tokenize(line);
         std::string label, opcode;
         std::vector<std::string> operands;
+        std::regex opRegex("[+\\-*/]");
 
         parseTokens(tokens, label, opcode, operands);
+
+        // Printar a tabela de símbolos
+        std::cout << "\n\n Symbol Table:" << std::endl;
+        for (const auto& symbol : symbolTable) {
+            std::cout << "Label: " << symbol.first << ", Address: " << symbol.second.address << ", Extern: " << symbol.second.isExtern << std::endl;
+        }
+        // Printar tabela de definições
+        std::cout << "\n\n Definition Table:" << std::endl;
+        for (const auto& symbol : definitionTable) {
+            std::cout << "Label: " << symbol.first << ", Address: " << symbol.second << std::endl;
+        }
+        // Printar tabela de uso
+        std::cout << "\n\n Usage Table:" << std::endl;
+        for (const auto& symbol : usageTable) {
+            std::cout << "Label: " << symbol.first << ", Address: ";
+            for (const auto& address : symbol.second) {
+                std::cout << address << " ";
+            }
+            std::cout << std::endl;
+        }
+        // Printar referências pendentes
+        std::cout << "\n\n Pending References:" << std::endl;
+        for (const auto& symbol : pendingReferences) {
+            std::cout << "Label: " << symbol.first << ", Address: ";
+            for (const auto& address : symbol.second) {
+                std::cout << address << " ";
+            }
+            std::cout << std::endl;
+        }
 
         // Processar rótulo
         if (!label.empty())
@@ -183,62 +209,140 @@ void Assembler::assemble(const std::string &inputFile, const std::string &finalO
             if (!isValidLabel(label))
                 throw std::runtime_error("Error: Invalid label: " + label);
 
-            if (opcode == "EXTERN")
+            std::cout << "Processing label: " << label << std::endl;
+
+            if (opcode == "BEGIN")
             {
+                std::cout << "Found BEGIN directive." << std::endl;
+                hasBegin = true;
+                symbolTable[label] = {locationCounter, false, true};
+                definitionTable[label] = locationCounter;
+                continue;
+            }
+            else if (opcode == "EXTERN")
+            {
+                std::cout << "Found EXTERN directive." << std::endl;
                 if (symbolTable.find(label) != symbolTable.end())
                     throw std::runtime_error("Error: Redefinition of symbol: " + label);
 
-                symbolTable[label] = {0, true}; // Endereço 0 e externo
+                symbolTable[label] = {locationCounter, true}; // Endereço 0 e externo
+                continue;                                     // Não processa como instrução
+            }
+            else if (opcode == "SPACE")
+            {
+                symbolTable[label] = {locationCounter, false}; // Endereço atual e não externo
+                std::cout << "Processing SPACE directive." << std::endl;
                 for (const auto &operand : operands)
                 {
-                    pendingReferences[operand].push_back(locationCounter);
-                    usageTable[operand].push_back(locationCounter);
-                    tempOutput << "XX "; // Coloca XX para referências não resolvidas
+                    std::cout << "Operand: " << operand << std::endl;
                 }
-                continue; // Não processa como instrução
+                if (!operands.empty())
+                {
+                    if (!isValidImmediateValue(operands[0]))
+                        throw std::runtime_error("Error: Invalid operand for SPACE directive: " + operands[0]);
+                    int spaceSize = std::stoi(operands[0]);
+                    for (int i = 0; i < spaceSize; ++i)
+                    {
+                        tempOutput << "00 ";
+                        locationCounter++;
+                    }
+                }
+                else
+                {
+                    throw std::runtime_error("Error: Missing operand for SPACE directive.");
+                }
+            }
+            else if (opcode == "STOP")
+            {
+                std::cout << "Processing STOP directive." << std::endl;
+                int opcodeValue = getOpcodeValue(opcode);
+                tempOutput << opcodeValue << " ";
+                locationCounter++;
+            }
+            else if (opcode == "CONST")
+            {
+                std::cout << "Processing CONST directive." << std::endl;
+                tempOutput << operands[0] << " ";
+                symbolTable[label] = {locationCounter, false}; // Endereço atual e não externo
+                definitionTable[label] = locationCounter;
+                locationCounter++;
             }
             else
             {
-                // Processa rótulo normal
-                if (symbolTable.find(label) != symbolTable.end())
-                    throw std::runtime_error("Error: Redefinition of label: " + label);
-
-                symbolTable[label] = {locationCounter, false, true}; // Endereço atual e não externo
+                std::cout << "Processing label without specific directive." << std::endl;
+                symbolTable[label] = {locationCounter, false}; // Endereço atual e não externo
             }
-        }
-
-        // Processar opcode e operandos
-        if (opcode == "BEGIN")
-        {
-            hasBegin = true;
-            continue; // Não processa como instrução
         }
         else if (opcode == "END")
         {
+            std::cout << "Found END directive." << std::endl;
             hasEnd = true;
             continue; // Não processa como instrução
         }
-        else if (opcode == "SPACE")
-        {
-            tempOutput << "00 ";
-            locationCounter++;
-        }
-        else if (opcode == "CONST")
-        {
-            tempOutput << operands[0] << " ";
-            locationCounter++;
-        }
         else if (opcode == "PUBLIC")
         {
-            if (symbolTable.find(operands[0]) == symbolTable.end())
-                symbolTable[operands[0]] = {0, false}; // Endereço 0 e não externo
-
-            symbolTable[label] = {locationCounter, false}; // Endereço atual e não externo
-            definitionTable[label] = locationCounter;
+            std::cout << "Found PUBLIC directive." << std::endl;
+            for (const auto &operand : operands)
+            {
+                definitionTable[operand] = {};
+            }
             continue; // Não processa como instrução
+        }
+        else if (std::regex_search(line, opRegex))
+        {
+            std::cout << "Processing EXPRESSION instruction for " << opcode << std::endl;
+            int opcodeValue = getOpcodeValue(opcode);
+            tempOutput << opcodeValue << " ";
+            locationCounter++;
+
+            std::cout << "operands: " << operands[0] << " and " << operands[2] << std::endl;
+
+            if (symbolTable.find(operands[0]) != symbolTable.end())
+            {
+                std::cout << "Processing expression token adress: " << symbolTable[operands[0]].address << std::endl;
+                int op_0 = symbolTable[operands[0]].address;
+                int op_2 = std::stoi(operands[2]);
+                char op = operands[1][0];
+                switch (op)
+                {
+                case '+':
+                    tempOutput << op_0 + op_2 << " ";
+                    break;
+                case '-':
+                    tempOutput << op_0 - op_2 << " ";
+                    break;
+                case '*':
+                    tempOutput << op_0 * op_2 << " ";
+                    break;
+                case '/':
+                    if (op_0 % op_2 != 0)
+                    {
+                        throw std::runtime_error("Error: Invalid division: " + std::to_string(op_0) + " / " + std::to_string(op_2));
+                    }
+                    tempOutput << op_0 / op_2 << " ";
+                    break;
+                default:
+                    throw std::runtime_error("Error: Invalid operator: " + std::string(1, op));
+                }
+                if (symbolTable[operands[0]].isExtern)
+                        usageTable[operands[0]].push_back(locationCounter);
+            }
+            else
+            {
+                std::cout << "Adding pending reference for EXPRESSION operands: " << operands[0] << std::endl;
+                // Adiciona referência pendente
+                pendingReferences[operands[0]].push_back(locationCounter);
+                std::cout << "EXPRESSION operands: " << operands[0] << " and " << operands[2] << std::endl;
+                std::cout << "EXPRESSION operator: " << operands[1] << std::endl;
+                if (symbolTable[operands[0]].isExtern)
+                        usageTable[operands[0]].push_back(locationCounter);
+                tempOutput << "EXP" << operands[1] << operands[2] << " "; // Coloca XX para referências não resolvidas
+            }
+            locationCounter++;
         }
         else
         {
+            std::cout << "Processing general instruction: " << opcode << "in location counter: " << locationCounter << std::endl;
             int opcodeValue = getOpcodeValue(opcode);
             tempOutput << opcodeValue << " ";
             locationCounter++;
@@ -248,16 +352,20 @@ void Assembler::assemble(const std::string &inputFile, const std::string &finalO
                 if (symbolTable.find(operand) != symbolTable.end())
                 {
                     tempOutput << symbolTable[operand].address << " ";
+                    std::cout << symbolTable[operand].isExtern << std::endl;
+                    if (symbolTable[operand].isExtern)
+                        usageTable[operand].push_back(locationCounter);
                 }
                 else if (isValidImmediateValue(operand))
                 {
+                    std::cout << "Processing immediate value: " << operand << std::endl;
                     tempOutput << operand << " ";
                 }
                 else
                 {
+                    std::cout << "Adding pending reference for operand: " << operand << "in location counter: " << locationCounter << std::endl;
                     // Adiciona referência pendente
                     pendingReferences[operand].push_back(locationCounter);
-                    usageTable[operand].push_back(locationCounter);
                     tempOutput << "XX "; // Coloca XX para referências não resolvidas
                 }
                 locationCounter++;
@@ -271,11 +379,12 @@ void Assembler::assemble(const std::string &inputFile, const std::string &finalO
     }
 
     input.close();
-    tempOutput.close();
 
     // Segunda Passagem: Substituição de referências pendentes
-    std::ifstream tempInput("temp.obj");
+    std::istringstream tempInput(tempOutput.str());
     locationCounter = 0;
+    std::regex pattern("^EXP");
+    std::cout << "Second pass: Resolving pending references." << std::endl;
     while (std::getline(tempInput, line))
     {
         std::istringstream iss(line);
@@ -295,6 +404,8 @@ void Assembler::assemble(const std::string &inputFile, const std::string &finalO
                             if (locationCounter == refPos)
                             {
                                 finalOutput << symbolValue << " ";
+                                definitionTable[operand] = symbolValue;
+                                std::cout << "Resolved pending reference for symbol: " << operand << " at position " << refPos << " with value " << symbolValue << std::endl;
                                 resolved = true;
                                 break;
                             }
@@ -305,11 +416,60 @@ void Assembler::assemble(const std::string &inputFile, const std::string &finalO
                 }
                 if (!resolved)
                 {
+                    std::cout << "Unresolved reference at position " << locationCounter << ". Using default value 00." << std::endl;
                     finalOutput << "00 "; // Caso não tenha sido resolvido, coloca zero
+                }
+            }
+            else if (std::regex_search(token, pattern))
+            {
+                bool resolved = false;
+                for (const auto &[operand, refs] : pendingReferences)
+                {
+                    if (symbolTable.find(operand) != symbolTable.end() && !symbolTable[operand].isExtern)
+                    {
+                        int symbolValue = symbolTable[operand].address;
+                        for (int refPos : refs)
+                        {
+                            if (locationCounter == refPos)
+                            {
+                                std::cout << "Processing expression token: " << token << std::endl;
+                                std::cout << "SymbolValue: " << symbolValue << std::endl;
+                                int op_0 = symbolValue;
+                                int op_2 = std::stoi(token.substr(4));
+                                char op = token[3];
+                                switch (op)
+                                {
+                                case '+':
+                                    finalOutput << op_0 + op_2 << " ";
+                                    break;
+                                case '-':
+                                    finalOutput << op_0 - op_2 << " ";
+                                    break;
+                                case '*':
+                                    finalOutput << op_0 * op_2 << " ";
+                                    break;
+                                case '/':
+                                    if (op_0 % op_2 != 0)
+                                    {
+                                        throw std::runtime_error("Error: Invalid division: " + std::to_string(op_0) + " / " + std::to_string(op_2));
+                                    }
+                                    finalOutput << op_0 / op_2 << " ";
+                                    break;
+                                default:
+                                    throw std::runtime_error("Error: Invalid operator: " + std::string(1, op));
+                                }
+                                resolved = true;
+                                break;
+                            }
+                        }
+                        if (resolved)
+                            break;
+                    }
                 }
             }
             else
             {
+                std::cout << "Writing token: " << token << std::endl;
                 finalOutput << token << " ";
             }
             locationCounter++;
@@ -317,25 +477,27 @@ void Assembler::assemble(const std::string &inputFile, const std::string &finalO
         finalOutput << std::endl;
     }
 
-    tempInput.close();
-    finalOutput.close();
-
     // Escreve a tabela de definições no final do arquivo de saída
+    std::cout << "Writing definition table to output file." << std::endl;
     finalOutput << "DEFINITION TABLE:" << std::endl;
     for (const auto &[symbol, address] : definitionTable)
     {
+        std::cout << "Definition: " << symbol << " " << address << std::endl;
         finalOutput << symbol << " " << address << std::endl;
     }
 
     // Escreve a tabela de uso no final do arquivo de saída
+    std::cout << "Writing usage table to output file." << std::endl;
     finalOutput << "USAGE TABLE:" << std::endl;
     for (const auto &[symbol, refs] : usageTable)
     {
         finalOutput << symbol << " ";
         for (const auto &ref : refs)
         {
+            std::cout << "Usage: " << symbol << " " << ref << std::endl;
             finalOutput << ref << " ";
         }
         finalOutput << std::endl;
     }
+    finalOutput.close();
 }
