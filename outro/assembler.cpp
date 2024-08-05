@@ -144,6 +144,126 @@ struct SymbolInfo
     bool isResolved;
 };
 
+// Função para processar a diretiva "BEGIN"
+void Assembler::processBeginDirective()
+{
+    std::cout << "Found BEGIN directive." << std::endl;
+    hasBegin = true;
+    symbolTable[label] = {locationCounter, false, true};
+    definitionTable[label] = locationCounter;
+    continue;
+}
+
+// Função para processar a diretiva "EXTERN"
+void Assembler::processExternDirective()
+{
+    std::cout << "Found EXTERN directive." << std::endl;
+    if (symbolTable.find(label) != symbolTable.end())
+        throw std::runtime_error("Error: Redefinition of symbol: " + label);
+
+    symbolTable[label] = {locationCounter, true};
+    continue;
+}
+
+// Função para processar a diretiva "SPACE"
+void Assembler::processSpaceDirective()
+{
+    symbolTable[label] = {locationCounter, false}; // Endereço atual e não externo
+    std::cout << "Processing SPACE directive." << std::endl;
+    for (const auto &operand : operands)
+    {
+        std::cout << "Operand: " << operand << std::endl;
+    }
+    if (!operands.empty())
+    {
+        if (!isValidImmediateValue(operands[0]))
+            throw std::runtime_error("Error: Invalid operand for SPACE directive: " + operands[0]);
+        int spaceSize = std::stoi(operands[0]);
+        for (int i = 0; i < spaceSize; ++i)
+        {
+            tempOutput << "00 ";
+            locationCounter++;
+        }
+    }
+    else
+    {
+        throw std::runtime_error("Error: Missing operand for SPACE directive.");
+    }
+}
+
+// Função para processar a diretiva "STOP"
+void Assembler::processStopDirective()
+{
+    std::cout << "Processing STOP directive." << std::endl;
+    int opcodeValue = getOpcodeValue(opcode);
+    tempOutput << opcodeValue << " ";
+    locationCounter++;
+}
+
+// Função para processar a diretiva "CONST"
+void Assembler::processConstDirective()
+{
+    std::cout << "Processing CONST directive." << std::endl;
+    tempOutput << operands[0] << " ";
+    symbolTable[label] = {locationCounter, false}; // Endereço atual e não externo
+    definitionTable[label] = locationCounter;
+    locationCounter++;
+}
+
+// Função para processar instruções de expressão
+void Assembler::processExpressionInstruction(line, opRegex)
+{
+    std::cout << "Processing EXPRESSION instruction for " << opcode << std::endl;
+    int opcodeValue = getOpcodeValue(opcode);
+    tempOutput << opcodeValue << " ";
+    locationCounter++;
+
+    std::cout << "operands: " << operands[0] << " and " << operands[2] << std::endl;
+
+    if (symbolTable.find(operands[0]) != symbolTable.end())
+    {
+        std::cout << "Processing expression token adress: " << symbolTable[operands[0]].address << std::endl;
+        int op_0 = symbolTable[operands[0]].address;
+        int op_2 = std::stoi(operands[2]);
+        char op = operands[1][0];
+        switch (op)
+        {
+        case '+':
+            tempOutput << op_0 + op_2 << " ";
+            break;
+        case '-':
+            tempOutput << op_0 - op_2 << " ";
+            break;
+        case '*':
+            tempOutput << op_0 * op_2 << " ";
+            break;
+        case '/':
+            if (op_0 % op_2 != 0)
+            {
+                throw std::runtime_error("Error: Invalid division: " + std::to_string(op_0) + " / " + std::to_string(op_2));
+            }
+            tempOutput << op_0 / op_2 << " ";
+            break;
+        default:
+            throw std::runtime_error("Error: Invalid operator: " + std::string(1, op));
+        }
+        if (symbolTable[operands[0]].isExtern)
+            usageTable[operands[0]].push_back(locationCounter);
+    }
+    else
+    {
+        std::cout << "Adding pending reference for EXPRESSION operands: " << operands[0] << std::endl;
+        // Adiciona referência pendente
+        pendingReferences[operands[0]].push_back(locationCounter);
+        std::cout << "EXPRESSION operands: " << operands[0] << " and " << operands[2] << std::endl;
+        std::cout << "EXPRESSION operator: " << operands[1] << std::endl;
+        if (symbolTable[operands[0]].isExtern)
+            usageTable[operands[0]].push_back(locationCounter);
+        tempOutput << "EXP" << operands[1] << operands[2] << " "; // Coloca XX para referências não resolvidas
+    }
+    locationCounter++;
+}
+
 void Assembler::assemble(const std::string &inputFile, const std::string &finalOutputFile)
 {
     std::ifstream input(inputFile);
@@ -176,28 +296,34 @@ void Assembler::assemble(const std::string &inputFile, const std::string &finalO
 
         // Printar a tabela de símbolos
         std::cout << "\n\n Symbol Table:" << std::endl;
-        for (const auto& symbol : symbolTable) {
+        for (const auto &symbol : symbolTable)
+        {
             std::cout << "Label: " << symbol.first << ", Address: " << symbol.second.address << ", Extern: " << symbol.second.isExtern << std::endl;
         }
         // Printar tabela de definições
         std::cout << "\n\n Definition Table:" << std::endl;
-        for (const auto& symbol : definitionTable) {
+        for (const auto &symbol : definitionTable)
+        {
             std::cout << "Label: " << symbol.first << ", Address: " << symbol.second << std::endl;
         }
         // Printar tabela de uso
         std::cout << "\n\n Usage Table:" << std::endl;
-        for (const auto& symbol : usageTable) {
+        for (const auto &symbol : usageTable)
+        {
             std::cout << "Label: " << symbol.first << ", Address: ";
-            for (const auto& address : symbol.second) {
+            for (const auto &address : symbol.second)
+            {
                 std::cout << address << " ";
             }
             std::cout << std::endl;
         }
         // Printar referências pendentes
         std::cout << "\n\n Pending References:" << std::endl;
-        for (const auto& symbol : pendingReferences) {
+        for (const auto &symbol : pendingReferences)
+        {
             std::cout << "Label: " << symbol.first << ", Address: ";
-            for (const auto& address : symbol.second) {
+            for (const auto &address : symbol.second)
+            {
                 std::cout << address << " ";
             }
             std::cout << std::endl;
@@ -261,10 +387,57 @@ void Assembler::assemble(const std::string &inputFile, const std::string &finalO
             }
             else if (opcode == "CONST")
             {
-                std::cout << "Processing CONST directive." << std::endl;
-                tempOutput << operands[0] << " ";
-                symbolTable[label] = {locationCounter, false}; // Endereço atual e não externo
-                definitionTable[label] = locationCounter;
+            }
+            else if (std::regex_search(line, opRegex))
+            {
+                std::cout << "Processing EXPRESSION instruction for " << opcode << std::endl;
+                int opcodeValue = getOpcodeValue(opcode);
+                tempOutput << opcodeValue << " ";
+                locationCounter++;
+
+                std::cout << "operands: " << operands[0] << " and " << operands[2] << std::endl;
+
+                if (symbolTable.find(operands[0]) != symbolTable.end())
+                {
+                    std::cout << "Processing expression token adress: " << symbolTable[operands[0]].address << std::endl;
+                    int op_0 = symbolTable[operands[0]].address;
+                    int op_2 = std::stoi(operands[2]);
+                    char op = operands[1][0];
+                    switch (op)
+                    {
+                    case '+':
+                        tempOutput << op_0 + op_2 << " ";
+                        break;
+                    case '-':
+                        tempOutput << op_0 - op_2 << " ";
+                        break;
+                    case '*':
+                        tempOutput << op_0 * op_2 << " ";
+                        break;
+                    case '/':
+                        if (op_0 % op_2 != 0)
+                        {
+                            throw std::runtime_error("Error: Invalid division: " + std::to_string(op_0) + " / " + std::to_string(op_2));
+                        }
+                        tempOutput << op_0 / op_2 << " ";
+                        break;
+                    default:
+                        throw std::runtime_error("Error: Invalid operator: " + std::string(1, op));
+                    }
+                    if (symbolTable[operands[0]].isExtern)
+                        usageTable[operands[0]].push_back(locationCounter);
+                }
+                else
+                {
+                    std::cout << "Adding pending reference for EXPRESSION operands: " << operands[0] << std::endl;
+                    // Adiciona referência pendente
+                    pendingReferences[operands[0]].push_back(locationCounter);
+                    std::cout << "EXPRESSION operands: " << operands[0] << " and " << operands[2] << std::endl;
+                    std::cout << "EXPRESSION operator: " << operands[1] << std::endl;
+                    if (symbolTable[operands[0]].isExtern)
+                        usageTable[operands[0]].push_back(locationCounter);
+                    tempOutput << "EXP" << operands[1] << operands[2] << " "; // Coloca XX para referências não resolvidas
+                }
                 locationCounter++;
             }
             else
@@ -325,7 +498,7 @@ void Assembler::assemble(const std::string &inputFile, const std::string &finalO
                     throw std::runtime_error("Error: Invalid operator: " + std::string(1, op));
                 }
                 if (symbolTable[operands[0]].isExtern)
-                        usageTable[operands[0]].push_back(locationCounter);
+                    usageTable[operands[0]].push_back(locationCounter);
             }
             else
             {
@@ -335,7 +508,7 @@ void Assembler::assemble(const std::string &inputFile, const std::string &finalO
                 std::cout << "EXPRESSION operands: " << operands[0] << " and " << operands[2] << std::endl;
                 std::cout << "EXPRESSION operator: " << operands[1] << std::endl;
                 if (symbolTable[operands[0]].isExtern)
-                        usageTable[operands[0]].push_back(locationCounter);
+                    usageTable[operands[0]].push_back(locationCounter);
                 tempOutput << "EXP" << operands[1] << operands[2] << " "; // Coloca XX para referências não resolvidas
             }
             locationCounter++;
